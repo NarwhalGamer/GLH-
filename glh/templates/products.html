@@ -5,6 +5,7 @@
 
 <div class="page-layout">
 
+    <!-- Filter panel on the left -->
     <aside class="filter-panel">
         <h3>Filter Products</h3>
         <form method="GET" action="{{ url_for('products') }}">
@@ -39,6 +40,7 @@
         </form>
     </aside>
 
+    <!-- Product grid on the right -->
     <section class="product-section">
         <h2>All Products</h2>
 
@@ -51,7 +53,9 @@
                         </div>
                         <div class="product-info">
                             <p class="product-producer">{{ product.producer.name }}</p>
-                            <h3 class="product-name">{{ product.name }}</h3>
+                            <a href="{{ url_for('product_detail', product_id=product.id) }}">
+                                <h3 class="product-name">{{ product.name }}</h3>
+                            </a>
                             <p class="product-price">£{{ "%.2f"|format(product.price) }}</p>
                             {% if product.stock > 0 %}
                                 <form method="POST" action="{{ url_for('add_to_basket', product_id=product.id) }}">

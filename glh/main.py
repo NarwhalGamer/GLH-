@@ -61,11 +61,12 @@ class Product(db.Model):
 class Order(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    order_type = db.Column(db.String(20), nullable=False)  # delivery or collection
+    order_type = db.Column(db.String(20), nullable=False)
     total = db.Column(db.Float, nullable=False)
     status = db.Column(db.String(30), default='preparing')
     date = db.Column(db.DateTime, default=datetime.utcnow)
     time_slot = db.Column(db.String(20))
+    user = db.relationship('User', backref='orders')
 
 # ── ROUTES ───────────────────────────────────────────────────
 
@@ -202,12 +203,6 @@ def add_to_basket(product_id):
     flash(f'{product.name} added to basket!', 'success')
     return redirect(url_for('products'))
 
-# Placeholder routes for dashboards
-
-@app.route('/admin/dashboard')
-@login_required
-def admin_dashboard():
-    return render_template('admin_dashboard.html')
 # Remove item from basket
 @app.route('/remove_from_basket/<int:product_id>')
 def remove_from_basket(product_id):
@@ -348,6 +343,111 @@ def mark_order_ready(order_id):
     db.session.commit()
     flash('Order marked as ready!', 'success')
     return redirect(url_for('producer_dashboard'))
+# Admin dashboard — only accessible to staff
+@app.route('/admin/dashboard')
+@login_required
+def admin_dashboard():
+    if current_user.role != 'staff':
+        flash('Access denied.', 'danger')
+        return redirect(url_for('index'))
+
+    pending_products = Product.query.filter_by(status='pending').all()
+    orders = Order.query.order_by(Order.date.desc()).all()
+    users = User.query.all()
+    total_orders = Order.query.count()
+    total_revenue = db.session.query(db.func.sum(Order.total)).scalar() or 0
+    total_users = User.query.count()
+    total_products = Product.query.filter_by(status='live').count()
+
+    return render_template('admin_dashboard.html',
+                           pending_products=pending_products,
+                           orders=orders,
+                           users=users,
+                           total_orders=total_orders,
+                           total_revenue=total_revenue,
+                           total_users=total_users,
+                           total_products=total_products)
+
+# Approve a product
+@app.route('/admin/approve_product/<int:product_id>')
+@login_required
+def approve_product(product_id):
+    if current_user.role != 'staff':
+        flash('Access denied.', 'danger')
+        return redirect(url_for('index'))
+    product = Product.query.get_or_404(product_id)
+    product.status = 'live'
+    db.session.commit()
+    flash(f'{product.name} approved and is now live!', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+# Reject a product
+@app.route('/admin/reject_product/<int:product_id>')
+@login_required
+def reject_product(product_id):
+    if current_user.role != 'staff':
+        flash('Access denied.', 'danger')
+        return redirect(url_for('index'))
+    product = Product.query.get_or_404(product_id)
+    db.session.delete(product)
+    db.session.commit()
+    flash(f'{product.name} rejected and removed.', 'danger')
+    return redirect(url_for('admin_dashboard'))
+
+# Update order status
+@app.route('/admin/update_order/<int:order_id>')
+@login_required
+def update_order_status(order_id):
+    if current_user.role != 'staff':
+        flash('Access denied.', 'danger')
+        return redirect(url_for('index'))
+    order = Order.query.get_or_404(order_id)
+    # Cycle through statuses
+    if order.status == 'preparing':
+        order.status = 'ready'
+    elif order.status == 'ready':
+        order.status = 'delivered'
+    db.session.commit()
+    flash(f'Order #{order.id} status updated to {order.status}.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+# Delete a user
+@app.route('/admin/delete_user/<int:user_id>')
+@login_required
+def delete_user(user_id):
+    if current_user.role != 'staff':
+        flash('Access denied.', 'danger')
+        return redirect(url_for('index'))
+    user = User.query.get_or_404(user_id)
+    db.session.delete(user)
+    db.session.commit()
+    flash('User removed.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+# Product detail page
+@app.route('/product/<int:product_id>')
+def product_detail(product_id):
+    product = Product.query.get_or_404(product_id)
+    return render_template('product.html', product=product)
+
+# Our Producers page
+@app.route('/producers')
+def our_producers():
+    producers = Producer.query.all()
+    return render_template('producers.html', producers=producers)
+
+# About page
+@app.route('/about')
+def about():
+    return render_template('about.html')
+
+# My Account page
+@app.route('/account')
+@login_required
+def account():
+    orders = Order.query.filter_by(user_id=current_user.id).order_by(Order.date.desc()).all()
+    return render_template('account.html', orders=orders)
+
 # ── SAMPLE DATA ───────────────────────────────────────────────
 
 def add_sample_data():
@@ -356,9 +456,9 @@ def add_sample_data():
         return
 
     # Create sample producers
-    hillside = Producer(name='Hillside Farm', description='A family farm based 3 miles from Greenfield, farming sustainably since 1987.', location='Greenfield')
-    greenway = Producer(name='Greenway Bakery', description='Artisan bakery using locally sourced grain to make fresh bread daily.', location='Greenfield')
-    meadow = Producer(name='Meadow Bees', description='Family run beekeeping operation producing raw wildflower honey.', location='Greenfield')
+    hillside = Producer(name='Hillside Farm', description='A small family farm just outside Greenfield. Free range chickens and seasonal veg, been part of the hub from day one.', location='Greenfield')
+    greenway = Producer(name='Greenway Bakery', description='Fresh baked every morning using grain from nearby farms. Run by two people out of a small bakery in the village.', location='Greenfield')
+    meadow = Producer(name='Meadow Bees', description='Small beekeeping setup on the outskirts of Greenfield. Raw honey, been growing their hives for a few years now.', location='Greenfield')
 
     db.session.add_all([hillside, greenway, meadow])
     db.session.commit()
@@ -373,13 +473,19 @@ def add_sample_data():
     hillside.user_id = producer_user.id
     db.session.commit()
 
+    # Create a staff account for testing
+    hashed_staff_pw = bcrypt.generate_password_hash('staff123').decode('utf-8')
+    staff_user = User(name='GLH Staff', email='staff@glh.com', password=hashed_staff_pw, role='staff')
+    db.session.add(staff_user)
+    db.session.commit()
+
     # Create sample products
     products = [
         Product(name='Free Range Eggs', description='Our hens roam freely on 40 acres of Greenfield pasture.', price=2.50, stock=48, category='Dairy & Eggs', allergens='Eggs', status='live', producer_id=hillside.id),
         Product(name='Full Fat Milk', description='Fresh whole milk delivered to the hub twice a week.', price=1.20, stock=24, category='Dairy & Eggs', allergens='Milk', status='live', producer_id=hillside.id),
         Product(name='Sourdough Loaf', description='Slow fermented sourdough baked fresh every morning.', price=3.80, stock=10, category='Bakery', allergens='Gluten, Wheat', status='live', producer_id=greenway.id),
         Product(name='Seeded Rolls 6pk', description='Six seeded rolls baked fresh daily.', price=2.20, stock=15, category='Bakery', allergens='Gluten, Wheat, Sesame', status='live', producer_id=greenway.id),
-        Product(name='Wildflower Honey', description='Raw unfiltered honey from our Greenfield hives.', price=4.50, stock=12, category='Honey', allergens='None', status='live', producer_id=meadow.id),
+        Product(name='Raw Honey', description='Raw unfiltered honey from our Greenfield hives.', price=4.50, stock=12, category='Honey', allergens='None', status='live', producer_id=meadow.id),
         Product(name='Seasonal Veg Box', description='A mixed box of whatever is in season this week.', price=9.99, stock=8, category='Vegetables', allergens='None', status='live', producer_id=meadow.id),
     ]
 
